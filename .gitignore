@@ -7,5 +7,5 @@ Terraform/environments/dev/.terraform.lock.hcl
 Terraform/environments/dev/terraform.tfstate
 Terraform/environments/dev/terraform.tfstate.backup
 ansible-tools
-
-  
+RBAC
+gmail_configure.txt
