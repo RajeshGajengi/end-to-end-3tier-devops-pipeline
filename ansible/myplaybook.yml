@@ -26,9 +26,12 @@
     - name: Execute the helm script
       script: ./scripts/helm_script.sh
 
+    - name: Execute the trivy script
+      script: ./scripts/trivy.sh
 
-# to monitor jenkins 
-    - name: Download node_exporter 
+
+    # to monitor jenkins server
+    - name: Download node_exporter  
       get_url: 
         url: https://github.com/prometheus/node_exporter/releases/download/v1.10.2/node_exporter-1.10.2.linux-amd64.tar.gz
         dest: /tmp
@@ -49,12 +52,12 @@
     - name: Run node_exporter in the background
       shell: "nohup ./node_exporter > node_exporter.log 2>&1 &"
       args:
-        chdir: "/opt/node_exporter-1.10.2.linux-amd64" # change directory before executing
+        chdir: "/opt/node_exporter-1.10.2.linux-amd64" 
 
 
 
 
-
+# SonarQube server 
 - name: Install docker,sonarqube on sonarqube server
   hosts: sonarqube
   become: true
@@ -83,7 +86,7 @@
 
 
 
-
+# Installing Prometheus , grafana and blackbox exporter on Monitor server
 - name: Install prometheus, Blackbox exporter and grafana
   hosts: monitor
   become: true
@@ -113,8 +116,8 @@
 
 
 
-
-  - name: Download backbox exporter
+  # Installing Blackbox Exporter for application monitoring
+  - name: Download blackbox exporter
     get_url: 
       url: https://github.com/prometheus/blackbox_exporter/releases/download/v0.27.0/blackbox_exporter-0.27.0.linux-amd64.tar.gz
       dest: /tmp
@@ -139,8 +142,7 @@
 
 
 
-
-
+  # Installing Grafana for visualization
   - name: Install dependencies for grafana
     apt:
       name:
