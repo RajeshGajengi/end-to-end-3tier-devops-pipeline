@@ -1,0 +1,175 @@
+pipeline {
+    agent any
+
+    environment {
+        BACKEND_IMAGE = 'r25gajengi/worker-backend:v2'
+        FRONTEND_IMAGE = 'r25gajengi/worker-frontend:v2'
+        AWS_REGION = 'us-east-1' 
+        CLUSTER_NAME = 'mycluster'
+        SONARQUBE = 'SonarQube'  
+        SCANNER_HOME = tool 'sonar'
+        SONAR_TOKEN = credentials('SONAR_TOKEN_ID')
+        DATADOG_API_KEY = credentials('DATADOG_API')
+    }
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/RajeshGajengi/eks-3tier-app-cicd.git'
+            }
+        }
+
+
+       stage('SonarQube Scan ') {
+        steps {
+            dir('app') {
+                withSonarQubeEnv("${SONARQUBE}") {
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=CrudApp -Dsonar.projectKey=CrudApp \
+                            -Dsonar.java.binaries=.
+                    '''
+                    }
+                }
+            }
+        }
+
+
+
+        stage('Buid & Tag Backend Docker Image') {
+            steps {
+                sh '''
+                    cd app/backend
+                    docker build -t ${BACKEND_IMAGE} -f docker/backend.dockerfile ./app/backend
+                '''
+            }
+        }
+
+        stage('Docker Backend Image Scan'){
+            steps{
+                sh "trivy image --format table -o trivy-backend-report.html ${BACKEND_IMAGE}"
+            }
+        }
+
+        stage('Buid & Tag Frontend Docker Image') {
+            steps {
+                sh '''
+                    cd app/frontend
+                    docker build -t ${FRONTEND_IMAGE} -f docker/frontend.dockerfile ./app/frontend
+                    docker push ${FRONTEND_IMAGE}
+                '''
+            }
+        }
+
+        stage('Docker Frontend Image Scan'){
+            steps{
+                sh "trivy image --format table -o trivy-frontend-report.html ${FRONTEND_IMAGE}"
+            }
+        }
+
+
+        stage('docker-login') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'docker-cred', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                    sh 'echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin'
+                }
+            }
+        }
+
+        stage('Push Docker images'){
+            steps{
+                sh '''
+                docker push ${BACKEND_IMAGE}
+                docker push ${FRONTEND_IMAGE}
+                '''
+            }
+        }
+
+        stage('configure-kubectl') {
+            steps {
+                withAWS(credentials: 'aws-cred', region: "${AWS_REGION}") {
+                    sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}'
+                }
+            }
+        }
+
+        stage('install-nginx-ingress') {
+            steps {
+                withAWS(credentials: 'aws-cred', region: "${AWS_REGION}") {
+                    sh 'kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml'
+                    echo 'Waiting for 60 seconds for ingress pods running...'
+                    sleep(time: 60, unit: 'SECONDS') 
+                    echo 'Resuming after wait.'
+                }
+            }
+        }
+
+        stage('deploy-to-kubernetes') {
+            steps {
+                withAWS(credentials: 'aws-cred', region: "${AWS_REGION}") {
+                    sh '''
+                        kubectl apply -f k8s/secrets.yml
+                        kubectl apply -f k8s/backend-deployment.yml
+                        kubectl apply -f k8s/backend-service.yml
+                        kubectl apply -f k8s/frontend-deployment.yml
+                        kubectl apply -f k8s/frontend-service.yml
+                        kubectl apply -f k8s/ingress.yml
+                    '''
+                }
+            }
+        }
+
+        stage('verify-deployment') {
+            steps {
+                withAWS(credentials: 'aws-cred', region: "${AWS_REGION}") {
+                    echo 'Waiting for 60 seconds for pods running...'
+                    sleep(time: 60, unit: 'SECONDS') 
+                    echo 'Resuming after wait.'
+                    sh '''
+                        kubectl get pods
+                        kubectl get svc
+                        kubectl get ingress
+                    '''
+                }
+            }
+        }
+    }
+
+
+    post {
+    always {
+        script {
+            def jobName = env.JOB_NAME
+            def buildNumber = env.BUILD_NUMBER
+            def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
+            def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
+
+            def body = """
+                <html>
+                <body>
+                <div style="border: 4px solid ${bannerColor}; padding: 10px;">
+                <h2>${jobName} - Build ${buildNumber}</h2>
+                <div style="background-color: ${bannerColor}; padding: 10px;">
+                <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+                </div>
+                <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
+                </div>
+                </body>
+                </html>
+            """
+
+            emailext (
+                subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                body: body,
+                to: 'rajuu9825@gmail.com',
+                from: 'rajuu9825@example.com',
+                replyTo: 'jenkins@example.com',
+                mimeType: 'text/html',
+                attachmentsPattern: 'trivy-backend-report.html,trivy-frontend-report.html'
+            )
+        }
+    }
+}
+
+
+
+}
